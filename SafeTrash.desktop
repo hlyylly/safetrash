@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=安全垃圾桶
+Name[en]=Safe Trash
+Comment=拖文件进来即彻底删除
+Exec=/opt/safetrash/SafeTrash
+Icon=user-trash-full
+Terminal=false
+Categories=Utility;
+StartupNotify=true
