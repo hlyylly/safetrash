@@ -138,29 +138,64 @@ def overwrite_file(path: Path, passes: int):
             os.fsync(f.fileno())
 
 
+def _force_unlink(path: Path):
+    """尝试多种方式 unlink 文件。返回 (success, error_msg)。"""
+    # 第一次直接 unlink
+    try:
+        path.unlink()
+        return True, None
+    except FileNotFoundError:
+        return True, None
+    except PermissionError as e:
+        last_err = str(e)
+
+    # chmod 0o666 后再试
+    try:
+        os.chmod(path, 0o666)
+    except OSError:
+        pass
+    try:
+        path.unlink()
+        return True, None
+    except FileNotFoundError:
+        return True, None
+    except OSError as e:
+        last_err = str(e)
+
+    # chmod 父目录 0o755 后再试（unlink 实际需要父目录写权限）
+    try:
+        os.chmod(path.parent, 0o755)
+    except OSError:
+        pass
+    try:
+        path.unlink()
+        return True, None
+    except FileNotFoundError:
+        return True, None
+    except OSError as e:
+        return False, str(e)
+
+
 def delete_path(path: Path, passes: int, log_fn, db=None):
-    if not path.exists():
+    if not path.exists() and not path.is_symlink():
         log_fn(f"✗ 不存在: {path}")
         return
 
     if path.is_file() or path.is_symlink():
-        try:
-            if path.is_file():
-                try:
-                    overwrite_file(path, passes)
-                except OSError as e:
-                    log_fn(f"  覆盖失败({e.strerror})，退化为直接删除")
+        # 覆盖（失败也继续，反正最终目标是删除）
+        if path.is_file() and passes > 0:
             try:
-                rand = path.parent / secrets.token_hex(8)
-                path.rename(rand)
-                rand.unlink()
-            except OSError:
-                path.unlink(missing_ok=True)
+                overwrite_file(path, passes)
+            except OSError as e:
+                log_fn(f"  覆盖跳过({e.strerror})")
+        # 删除：尝试多种方式
+        ok, err = _force_unlink(path)
+        if ok:
             if db:
                 db.remove_path(str(path))
             log_fn(f"✓ {path}")
-        except Exception as e:
-            log_fn(f"✗ {path}: {e}")
+        else:
+            log_fn(f"✗ {path}: {err}")
         return
 
     if path.is_dir():
@@ -175,9 +210,17 @@ def delete_path(path: Path, passes: int, log_fn, db=None):
         for child in all_items:
             if child.is_dir():
                 try:
+                    os.chmod(child, 0o755)
+                except OSError:
+                    pass
+                try:
                     child.rmdir()
                 except OSError:
                     pass
+        try:
+            os.chmod(path, 0o755)
+        except OSError:
+            pass
         try:
             path.rmdir()
             log_fn(f"✓ 目录 {path}")
